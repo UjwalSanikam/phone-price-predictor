@@ -24,7 +24,8 @@ def load_resources():
     
     # Try LightGBM model first (scaled version)
     if os.path.exists('price_predictor_lgb.pkl'):
-        resources['model'] = joblib.load('price_predictor_lgb.pkl')
+        import lightgbm as lgb
+        resources['model'] = lgb.Booster(model_file='price_predictor_lgb.pkl')
         resources['model_type'] = 'lgb'
     else:
         resources['model'] = joblib.load('price_predictor_model.pkl')
@@ -124,26 +125,33 @@ with tab1:
     trade_in = st.number_input("💵 Trade-in Value (₹)", 0, 100000, 10000, step=1000)
     
     if st.button("🔍 Predict Price", use_container_width=True, key="predict_single"):
-        # Prepare features
-        features = np.array([[
-            le_brand.transform([brand])[0],
-            storage,
-            le_condition.transform([condition])[0],
-            age,
-            battery,
-            camera_count,
-            screen_size,
-            seller_rating,
-            trade_in,
-            age / 12,  # model age factor
-            min((storage - 64) // 64, 3),  # storage category
-            min(int((screen_size - 5.0) / 0.7), 2),  # screen category
-            battery * 0.4 + le_condition.transform([condition])[0] * 25 + seller_rating * 20
-        ]])
-        
         try:
+            # Prepare features - must match training order: 16 features
+            # brand_encoded, storage_gb, condition_encoded, age_months, 
+            # battery_health, os_encoded, camera_count, screen_size, 
+            # color_encoded, network_encoded, seller_rating, trade_in_value,
+            # model_age_factor, storage_category, screen_size_category, overall_condition_score
+            
+            brand_enc = le_brand.transform([brand])[0]
+            condition_enc = le_condition.transform([condition])[0]
+            os_enc = resources.get('le_os', le_brand).transform(['Android 12'])[0] if 'le_os' in resources else 10
+            color_enc = resources.get('le_color', le_brand).transform(['Black'])[0] if 'le_color' in resources else 0
+            network_enc = resources.get('le_network', le_brand).transform(['5G'])[0] if 'le_network' in resources else 1
+            
+            storage_cat = min((storage - 64) // 64, 3)
+            screen_cat = min(int((screen_size - 5.0) / 0.7), 2)
+            model_age = age / 12
+            overall_score = battery * 0.4 + condition_enc * 25 + seller_rating * 20
+            
+            features = np.array([[
+                brand_enc, storage, condition_enc, age, 
+                battery, os_enc, camera_count, screen_size, 
+                color_enc, network_enc, seller_rating, trade_in,
+                model_age, storage_cat, screen_cat, overall_score
+            ]])
+            
             prediction = model.predict(features)[0]
-            st.success(f"## 💰 Estimated Price: ₹{prediction:,.0f}")
+            st.success(f"## 💰 Estimated Price: ₹{int(prediction):,}")
             
             # Additional insights
             col1, col2, col3 = st.columns(3)
@@ -154,7 +162,7 @@ with tab1:
             with col3:
                 st.metric("Depreciation", f"{((1 - (age / 60)) * 100):.0f}%")
         except Exception as e:
-            st.error(f"Error in prediction: {str(e)}")
+            st.error(f"❌ Error in prediction: {str(e)}\n\nPlease ensure the model is trained. Run: `python train_model_scaled.py`")
 
 # ============ TAB 2: ANALYTICS ============
 with tab2:
@@ -261,24 +269,37 @@ with tab5:
                 predictions = []
                 for idx, row in df_upload.iterrows():
                     try:
+                        condition_enc = le_condition.transform([row['condition']])[0]
+                        os_enc = resources.get('le_os', le_brand).transform(['Android 12'])[0] if 'le_os' in resources else 10
+                        color_enc = resources.get('le_color', le_brand).transform(['Black'])[0] if 'le_color' in resources else 0
+                        network_enc = resources.get('le_network', le_brand).transform(['5G'])[0] if 'le_network' in resources else 1
+                        
+                        storage_cat = min((row['storage_gb'] - 64) // 64, 3)
+                        screen_cat = min(int((row['screen_size'] - 5.0) / 0.7), 2)
+                        model_age = row['age_months'] / 12
+                        overall_score = row['battery_health'] * 0.4 + condition_enc * 25 + row['seller_rating'] * 20
+                        
                         features = np.array([[
                             le_brand.transform([row['brand']])[0],
                             row['storage_gb'],
-                            le_condition.transform([row['condition']])[0],
+                            condition_enc,
                             row['age_months'],
                             row['battery_health'],
+                            os_enc,
                             row['camera_count'],
                             row['screen_size'],
+                            color_enc,
+                            network_enc,
                             row['seller_rating'],
                             row['trade_in_value'],
-                            row['age_months'] / 12,
-                            min((row['storage_gb'] - 64) // 64, 3),
-                            min(int((row['screen_size'] - 5.0) / 0.7), 2),
-                            row['battery_health'] * 0.4 + 25 + row['seller_rating'] * 20
+                            model_age,
+                            storage_cat,
+                            screen_cat,
+                            overall_score
                         ]])
                         pred = model.predict(features)[0]
                         predictions.append(int(pred))
-                    except:
+                    except Exception as row_err:
                         predictions.append(0)
                     
                     progress_bar.progress((idx + 1) / len(df_upload))

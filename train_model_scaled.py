@@ -153,6 +153,11 @@ def train_scalable_model(data_file='phones_scaled.csv', sample_rate=1.0, max_sam
     print("✅ Models saved!")
     print(f"\n   price_predictor_lgb.pkl")
     print(f"   le_brand.pkl, le_os.pkl, le_color.pkl, le_condition.pkl, le_network.pkl")
+    
+    # Force garbage collection and flush
+    import gc
+    gc.collect()
+    print("✅ Complete!")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train scalable phone pricing model')
